@@ -165,7 +165,7 @@ impl EnclaveState {
         use tempfile::NamedTempFile;
 
         // Hash the evaluated point to include as user data in TPM quote
-        let user_data_hex = hex::encode(sha256_hex(user_data).as_bytes());
+        let user_data_hex = sha256_hex(user_data);
 
         // Create secure temporary files
         let pcr_file = NamedTempFile::new()
@@ -177,10 +177,20 @@ impl EnclaveState {
         let quote_pcr_file = NamedTempFile::new()
             .map_err(|e| format!("Failed to create temp file for quote PCRs: {}", e))?;
 
+        // Convert paths to strings with proper error handling
+        let pcr_path = pcr_file.path().to_str()
+            .ok_or_else(|| "PCR temp file path is not valid UTF-8".to_string())?;
+        let quote_msg_path = quote_msg_file.path().to_str()
+            .ok_or_else(|| "Quote message temp file path is not valid UTF-8".to_string())?;
+        let quote_sig_path = quote_sig_file.path().to_str()
+            .ok_or_else(|| "Quote signature temp file path is not valid UTF-8".to_string())?;
+        let quote_pcr_path = quote_pcr_file.path().to_str()
+            .ok_or_else(|| "Quote PCR temp file path is not valid UTF-8".to_string())?;
+
         // Read PCR values
         println!("[Enclave] Reading PCR values from TPM");
         let pcr_output = Command::new("tpm2_pcrread")
-            .args(["sha256:0,1,2,3,4,5,6,7", "-o", pcr_file.path().to_str().unwrap()])
+            .args(["sha256:0,1,2,3,4,5,6,7", "-o", pcr_path])
             .output()
             .map_err(|e| format!("Failed to execute tpm2_pcrread: {}. Ensure tpm2-tools is installed.", e))?;
 
@@ -202,9 +212,9 @@ impl EnclaveState {
                 "-c", TPM_AK_HANDLE,
                 "-l", "sha256:0,1,2,3,4,5,6,7",
                 "-q", &user_data_hex,
-                "-m", quote_msg_file.path().to_str().unwrap(),
-                "-s", quote_sig_file.path().to_str().unwrap(),
-                "-o", quote_pcr_file.path().to_str().unwrap(),
+                "-m", quote_msg_path,
+                "-s", quote_sig_path,
+                "-o", quote_pcr_path,
             ])
             .output()
             .map_err(|e| format!("Failed to execute tpm2_quote: {}", e))?;
