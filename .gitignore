@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target/
+/tdx-oprf/target/
+
+# Binaries
+**/target/release/tdx-oprf-enclave
+**/target/release/tdx-oprf-parent
+**/target/release/oprf-enclave
+**/target/release/oprf-parent
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# EIF files
+*.eif
