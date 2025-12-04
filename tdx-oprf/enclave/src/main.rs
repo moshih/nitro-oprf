@@ -187,10 +187,13 @@ impl EnclaveState {
         let quote_pcr_path = quote_pcr_file.path().to_str()
             .ok_or_else(|| "Quote PCR temp file path is not valid UTF-8".to_string())?;
 
+        // Build PCR list for TPM commands
+        let pcr_list = build_pcr_list();
+
         // Read PCR values
         println!("[Enclave] Reading PCR values from TPM");
         let pcr_output = Command::new("tpm2_pcrread")
-            .args(["sha256:0,1,2,3,4,5,6,7", "-o", pcr_path])
+            .args([&pcr_list, "-o", pcr_path])
             .output()
             .map_err(|e| format!("Failed to execute tpm2_pcrread: {}. Ensure tpm2-tools is installed.", e))?;
 
@@ -210,7 +213,7 @@ impl EnclaveState {
         let quote_output = Command::new("tpm2_quote")
             .args([
                 "-c", TPM_AK_HANDLE,
-                "-l", "sha256:0,1,2,3,4,5,6,7",
+                "-l", &pcr_list,
                 "-q", &user_data_hex,
                 "-m", quote_msg_path,
                 "-s", quote_sig_path,
@@ -288,6 +291,13 @@ fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>
     };
 
     (mrtd, rtmrs)
+}
+
+#[cfg(feature = "tdx-local")]
+fn build_pcr_list() -> String {
+    // Build PCR list string for TPM commands (e.g., "sha256:0,1,2,3,4,5,6,7")
+    let pcr_indices: Vec<String> = (0..NUM_PCRS).map(|i| i.to_string()).collect();
+    format!("sha256:{}", pcr_indices.join(","))
 }
 
 #[cfg(feature = "tdx-local")]
