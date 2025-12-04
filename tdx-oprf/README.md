@@ -99,10 +99,17 @@ tdx-oprf/
 
 ## Building
 
+> **⚠️ IMPORTANT: Which Mode Should You Use?**
+> - **Azure TDX VM (single VM)**: Use `tdx-local` mode ← **Most Common for Azure**
+> - **Two-VM nested setup with vsock**: Use `tdx` mode
+> - **Development/testing without TDX**: Use `local` mode (default)
+>
+> If you're on a **single Azure Confidential VM** and see vsock errors (`ENETUNREACH`), you need `tdx-local` mode, not `tdx` mode!
+
 The project supports three modes via feature flags:
 - `local` (default): Uses TCP sockets for testing without TDX
-- `tdx`: Uses vsock and TDX attestation (requires two-VM setup)
-- `tdx-local`: Uses TCP sockets with real TDX attestation (hybrid mode for single Azure TDX VM)
+- `tdx`: Uses vsock and configfs-tsm attestation (**requires two-VM nested virtualization setup**)
+- `tdx-local`: Uses TCP sockets with TPM attestation (**for single Azure TDX VM** - most common)
 
 ### Local Mode (Default)
 
@@ -116,7 +123,9 @@ cargo build --release --package tdx-oprf-enclave
 cargo build --release --package tdx-oprf-parent
 ```
 
-### TDX Mode
+### TDX Mode (Advanced - Two-VM Setup Only)
+
+> **Note**: This mode requires a nested virtualization setup with vsock communication between two VMs. **Not for single Azure TDX VMs** - use `tdx-local` mode instead.
 
 ```bash
 # Build enclave for TDX
@@ -126,9 +135,11 @@ cargo build --release --package tdx-oprf-enclave --features tdx
 cargo build --release --package tdx-oprf-parent --features tdx
 ```
 
-### TDX-Local Hybrid Mode
+### TDX-Local Hybrid Mode (Recommended for Azure)
 
-This mode combines TCP communication (like local mode) with real TDX attestation (like TDX mode). It's designed for running on a single Azure TDX VM where vsock between CID 2 and CID 3 is not available, but the VM has access to real TDX attestation via `/sys/kernel/config/tsm/report/tdx0`.
+> **✅ Use this mode for single Azure TDX VMs** - this is the most common deployment scenario on Azure.
+
+This mode combines TCP communication (like local mode) with TPM-based attestation. It's designed for running on a **single Azure TDX Confidential VM** where vsock is not available, but the VM has vTPM (`/dev/tpm0`) with PCR measurements bound to TDX.
 
 ```bash
 # Build enclave for TDX-Local hybrid mode
@@ -547,6 +558,24 @@ uname -r  # Should be 5.15 or later
 dmesg | grep -i tdx
 # Verify TDX attestation driver is loaded
 lsmod | grep tdx
+```
+
+### Mode Selection Issues
+
+**Problem**: `ENETUNREACH` error when connecting via vsock on a single Azure VM
+```
+Error: Custom { kind: Other, error: ENETUNREACH }
+[Parent] Connecting to enclave via vsock (CID: 3, Port: 5000)
+```
+```bash
+# Solution: You're using the wrong mode! You built with 'tdx' but need 'tdx-local'
+# On a single Azure TDX VM, vsock is not available - use tdx-local mode instead:
+cargo build --release --package tdx-oprf-enclave --features tdx-local
+cargo build --release --package tdx-oprf-parent --features tdx-local
+
+# Then run:
+sudo ./target/release/tdx-oprf-enclave  # Terminal 1
+./target/release/tdx-oprf-parent        # Terminal 2
 ```
 
 ### TPM Attestation Issues (TDX-Local Mode)
