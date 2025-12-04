@@ -18,6 +18,14 @@ const VSOCK_PORT: u32 = 5000;
 #[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_CID_ANY: u32 = 0xFFFFFFFF;
 
+// TPM constants
+#[cfg(feature = "tdx-local")]
+const TPM_AK_HANDLE: &str = "0x81010001"; // TPM attestation key handle
+#[cfg(feature = "tdx-local")]
+const SHA256_HASH_SIZE: usize = 32; // SHA256 produces 32-byte hashes
+#[cfg(feature = "tdx-local")]
+const NUM_PCRS: usize = 8; // Number of PCRs to read (0-7)
+
 /// Enclave state holding the secret key and public key
 struct EnclaveState {
     /// Secret key k
@@ -154,14 +162,25 @@ impl EnclaveState {
 
         use std::process::Command;
         use std::fs;
+        use tempfile::NamedTempFile;
 
         // Hash the evaluated point to include as user data in TPM quote
         let user_data_hex = hex::encode(sha256_hex(user_data).as_bytes());
 
+        // Create secure temporary files
+        let pcr_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for PCRs: {}", e))?;
+        let quote_msg_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote message: {}", e))?;
+        let quote_sig_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote signature: {}", e))?;
+        let quote_pcr_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote PCRs: {}", e))?;
+
         // Read PCR values
         println!("[Enclave] Reading PCR values from TPM");
         let pcr_output = Command::new("tpm2_pcrread")
-            .args(["sha256:0,1,2,3,4,5,6,7", "-o", "/tmp/pcr.bin"])
+            .args(["sha256:0,1,2,3,4,5,6,7", "-o", pcr_file.path().to_str().unwrap()])
             .output()
             .map_err(|e| format!("Failed to execute tpm2_pcrread: {}. Ensure tpm2-tools is installed.", e))?;
 
@@ -171,7 +190,7 @@ impl EnclaveState {
         }
 
         // Read the PCR binary data
-        let pcr_data = fs::read("/tmp/pcr.bin")
+        let pcr_data = fs::read(pcr_file.path())
             .map_err(|e| format!("Failed to read PCR data: {}", e))?;
 
         println!("[Enclave] Read PCR values ({} bytes)", pcr_data.len());
@@ -180,12 +199,12 @@ impl EnclaveState {
         println!("[Enclave] Generating TPM quote");
         let quote_output = Command::new("tpm2_quote")
             .args([
-                "-c", "0x81010001",  // Use a well-known persistent key handle
+                "-c", TPM_AK_HANDLE,
                 "-l", "sha256:0,1,2,3,4,5,6,7",
                 "-q", &user_data_hex,
-                "-m", "/tmp/quote.msg",
-                "-s", "/tmp/quote.sig",
-                "-o", "/tmp/quote.pcr",
+                "-m", quote_msg_file.path().to_str().unwrap(),
+                "-s", quote_sig_file.path().to_str().unwrap(),
+                "-o", quote_pcr_file.path().to_str().unwrap(),
             ])
             .output()
             .map_err(|e| format!("Failed to execute tpm2_quote: {}", e))?;
@@ -196,9 +215,9 @@ impl EnclaveState {
         }
 
         // Read the quote message and signature
-        let quote_msg = fs::read("/tmp/quote.msg")
+        let quote_msg = fs::read(quote_msg_file.path())
             .map_err(|e| format!("Failed to read quote message: {}", e))?;
-        let quote_sig = fs::read("/tmp/quote.sig")
+        let quote_sig = fs::read(quote_sig_file.path())
             .map_err(|e| format!("Failed to read quote signature: {}", e))?;
 
         println!("[Enclave] Generated TPM quote ({} bytes message, {} bytes signature)", 
@@ -213,14 +232,10 @@ impl EnclaveState {
         document.extend_from_slice(&quote_sig);
         document.extend_from_slice(&pcr_data);
 
-        // Extract PCR values for display (assuming 32 bytes each for SHA256)
+        // Extract PCR values for display
         let pcr_values = extract_pcr_values(&pcr_data);
 
-        // Clean up temporary files
-        let _ = fs::remove_file("/tmp/pcr.bin");
-        let _ = fs::remove_file("/tmp/quote.msg");
-        let _ = fs::remove_file("/tmp/quote.sig");
-        let _ = fs::remove_file("/tmp/quote.pcr");
+        // Temporary files are automatically cleaned up when they go out of scope
 
         Ok(AttestationDocument {
             is_mock: false,
@@ -267,13 +282,12 @@ fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>
 
 #[cfg(feature = "tdx-local")]
 fn extract_pcr_values(pcr_data: &[u8]) -> Vec<String> {
-    // PCR data format: consecutive 32-byte (SHA256) values for PCRs 0-7
+    // PCR data format: consecutive SHA256 hash values for PCRs 0-7
     let mut pcr_values = Vec::new();
-    let pcr_size = 32; // SHA256 hash size
     
-    for i in 0..8 {
-        let start = i * pcr_size;
-        let end = start + pcr_size;
+    for i in 0..NUM_PCRS {
+        let start = i * SHA256_HASH_SIZE;
+        let end = start + SHA256_HASH_SIZE;
         if end <= pcr_data.len() {
             pcr_values.push(hex::encode(&pcr_data[start..end]));
         }

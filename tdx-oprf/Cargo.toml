@@ -14,3 +14,4 @@ rand = "0.8"
 sha2 = "0.10"
 hex = "0.4"
 nix = { version = "0.27", features = ["socket"] }
+tempfile = "3.8"
