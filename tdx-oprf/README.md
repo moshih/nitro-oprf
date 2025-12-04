@@ -245,19 +245,13 @@ This mode is useful when:
    sudo apt install tpm2-tools
    ```
 3. **TPM attestation key** must be created (one-time setup):
-   ```bash
-   # Option A: Use tpm2_createak (recommended - handles all complexity automatically)
-   tpm2_createak -C e -G rsa -g sha256 -s rsassa -c /tmp/ak.ctx
-   tpm2_evictcontrol -C o -c /tmp/ak.ctx 0x81010001
-   tpm2_readpublic -c 0x81010001
-   ```
    
-   **Alternative Option B** (if tpm2_createak is not available or fails):
+   **Recommended approach** (works on most TPM configurations):
    ```bash
-   # Create a primary key in the endorsement hierarchy
-   tpm2_createprimary -C e -g sha256 -G rsa -c /tmp/primary.ctx
+   # Create a primary key in the owner hierarchy (more widely supported)
+   tpm2_createprimary -C o -g sha256 -G rsa -c /tmp/primary.ctx
    
-   # Create a signing key (simpler approach that works with tpm2_quote)
+   # Create a signing key (works with tpm2_quote)
    tpm2_create -C /tmp/primary.ctx -g sha256 -G rsa -r /tmp/ak.priv -u /tmp/ak.pub \
      -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign"
    
@@ -271,7 +265,14 @@ This mode is useful when:
    tpm2_readpublic -c 0x81010001
    ```
    
-   **Note**: Option A creates a proper attestation key. Option B creates a simpler signing key that still works with `tpm2_quote`. The key difference is that Option B removes the `restricted` attribute which was causing the incompatibility error.
+   **Alternative: Using tpm2_createak** (if the above doesn't work):
+   ```bash
+   # Try with owner hierarchy instead of endorsement
+   tpm2_createak -C o -G rsa -g sha256 -s rsassa -c /tmp/ak.ctx
+   tpm2_evictcontrol -C o -c /tmp/ak.ctx 0x81010001
+   ```
+   
+   **Note**: The recommended approach uses the owner hierarchy (`-C o`) instead of endorsement hierarchy (`-C e`) as it's more widely accessible. The key is created without the `restricted` attribute to avoid compatibility issues while still working with `tpm2_quote`.
 
 #### Quick Start for TDX-Local
 
