@@ -42,34 +42,51 @@ fn verify_attestation(
 
         Ok(())
     } else {
-        println!("[Parent] Verifying TDX attestation");
-
         // Verify user data matches
         if attestation.user_data != expected_user_data {
             return Err("User data mismatch in attestation".to_string());
         }
 
-        // Display TDX measurements
-        if let Some(mrtd) = &attestation.mrtd {
-            println!("[Parent] MRTD: {}", mrtd);
-        }
+        // Determine if this is TDX (configfs-tsm) or TPM-based attestation
+        if attestation.mrtd.is_some() {
+            // TDX attestation via configfs-tsm
+            println!("[Parent] Verifying TDX attestation (configfs-tsm)");
 
-        if let Some(rtmrs) = &attestation.rtmrs {
-            for (i, rtmr) in rtmrs.iter().enumerate() {
-                println!("[Parent] RTMR{}: {}", i, rtmr);
+            // Display TDX measurements
+            if let Some(mrtd) = &attestation.mrtd {
+                println!("[Parent] MRTD: {}", mrtd);
             }
+
+            if let Some(rtmrs) = &attestation.rtmrs {
+                for (i, rtmr) in rtmrs.iter().enumerate() {
+                    println!("[Parent] RTMR{}: {}", i, rtmr);
+                }
+            }
+
+            println!("[Parent] TDX quote size: {} bytes", attestation.document.len());
+
+            println!("[Parent] WARNING: Full TDX quote verification not implemented");
+            println!("[Parent] In production, verify quote with Intel Attestation Service");
+        } else {
+            // TPM-based attestation (Azure TDX)
+            println!("[Parent] Verifying TPM attestation (Azure TDX)");
+
+            // Display PCR values
+            if let Some(pcrs) = &attestation.rtmrs {
+                for (i, pcr) in pcrs.iter().enumerate() {
+                    println!("[Parent] PCR{}: {}", i, pcr);
+                }
+            }
+
+            println!("[Parent] TPM attestation document size: {} bytes", attestation.document.len());
+
+            println!("[Parent] WARNING: Full TPM quote verification not implemented");
+            println!("[Parent] In production:");
+            println!("[Parent]   1. Verify TPM quote signature");
+            println!("[Parent]   2. Validate PCR values match expected boot measurements");
+            println!("[Parent]   3. Verify user data is correctly bound to the quote");
+            println!("[Parent]   4. Check that PCRs reflect TDX measurements via vTPM binding");
         }
-
-        println!("[Parent] TDX quote size: {} bytes", attestation.document.len());
-
-        // In production, you would:
-        // 1. Verify the quote signature using Intel's attestation service
-        // 2. Check MRTD matches expected TDX module measurement
-        // 3. Check RTMR values match expected initial state
-        // 4. Verify the quote is recent (check timestamp)
-
-        println!("[Parent] WARNING: Full TDX quote verification not implemented");
-        println!("[Parent] In production, verify quote with Intel Attestation Service");
 
         Ok(())
     }

@@ -29,13 +29,13 @@ pub struct OprfResponse {
 /// Attestation document structure
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AttestationDocument {
-    /// Whether this is a mock attestation or real TDX
+    /// Whether this is a mock attestation or real TDX/TPM
     pub is_mock: bool,
-    /// The attestation data (TDX quote in real mode)
+    /// The attestation data (TDX quote in real mode, TPM quote+signature in TPM mode)
     pub document: Vec<u8>,
-    /// MRTD (Measurement of TDX module)
+    /// MRTD (Measurement of TDX module) - None for TPM mode
     pub mrtd: Option<String>,
-    /// RTMR values (Runtime Measurement Registers)
+    /// RTMR values (Runtime Measurement Registers) for TDX, PCR values for TPM
     pub rtmrs: Option<Vec<String>>,
     /// User data included in attestation
     pub user_data: Vec<u8>,

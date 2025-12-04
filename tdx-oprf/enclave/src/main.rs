@@ -18,6 +18,14 @@ const VSOCK_PORT: u32 = 5000;
 #[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_CID_ANY: u32 = 0xFFFFFFFF;
 
+// TPM constants
+#[cfg(feature = "tdx-local")]
+const TPM_AK_HANDLE: &str = "0x81010001"; // TPM attestation key handle
+#[cfg(feature = "tdx-local")]
+const SHA256_HASH_SIZE: usize = 32; // SHA256 produces 32-byte hashes
+#[cfg(feature = "tdx-local")]
+const NUM_PCRS: usize = 8; // Number of PCRs to read (0-7)
+
 /// Enclave state holding the secret key and public key
 struct EnclaveState {
     /// Secret key k
@@ -101,7 +109,7 @@ impl EnclaveState {
         })
     }
 
-    #[cfg(any(feature = "tdx", feature = "tdx-local"))]
+    #[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
     fn generate_attestation(&self, user_data: &[u8]) -> Result<AttestationDocument, String> {
         println!("[Enclave] Generating TDX attestation");
 
@@ -147,9 +155,112 @@ impl EnclaveState {
             user_data: user_data.to_vec(),
         })
     }
+
+    #[cfg(feature = "tdx-local")]
+    fn generate_attestation(&self, user_data: &[u8]) -> Result<AttestationDocument, String> {
+        println!("[Enclave] Generating TDX attestation (TPM-based)");
+
+        use std::process::Command;
+        use std::fs;
+        use tempfile::NamedTempFile;
+
+        // Hash the evaluated point to include as user data in TPM quote
+        let user_data_hex = sha256_hex(user_data);
+
+        // Create secure temporary files
+        let pcr_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for PCRs: {}", e))?;
+        let quote_msg_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote message: {}", e))?;
+        let quote_sig_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote signature: {}", e))?;
+        let quote_pcr_file = NamedTempFile::new()
+            .map_err(|e| format!("Failed to create temp file for quote PCRs: {}", e))?;
+
+        // Convert paths to strings with proper error handling
+        let pcr_path = pcr_file.path().to_str()
+            .ok_or_else(|| "PCR temp file path is not valid UTF-8".to_string())?;
+        let quote_msg_path = quote_msg_file.path().to_str()
+            .ok_or_else(|| "Quote message temp file path is not valid UTF-8".to_string())?;
+        let quote_sig_path = quote_sig_file.path().to_str()
+            .ok_or_else(|| "Quote signature temp file path is not valid UTF-8".to_string())?;
+        let quote_pcr_path = quote_pcr_file.path().to_str()
+            .ok_or_else(|| "Quote PCR temp file path is not valid UTF-8".to_string())?;
+
+        // Build PCR list for TPM commands
+        let pcr_list = build_pcr_list();
+
+        // Read PCR values
+        println!("[Enclave] Reading PCR values from TPM");
+        let pcr_output = Command::new("tpm2_pcrread")
+            .args([&pcr_list, "-o", pcr_path])
+            .output()
+            .map_err(|e| format!("Failed to execute tpm2_pcrread: {}. Ensure tpm2-tools is installed.", e))?;
+
+        if !pcr_output.status.success() {
+            let stderr = String::from_utf8_lossy(&pcr_output.stderr);
+            return Err(format!("tpm2_pcrread failed: {}", stderr));
+        }
+
+        // Read the PCR binary data
+        let pcr_data = fs::read(pcr_file.path())
+            .map_err(|e| format!("Failed to read PCR data: {}", e))?;
+
+        println!("[Enclave] Read PCR values ({} bytes)", pcr_data.len());
+
+        // Generate TPM quote with user data
+        println!("[Enclave] Generating TPM quote");
+        let quote_output = Command::new("tpm2_quote")
+            .args([
+                "-c", TPM_AK_HANDLE,
+                "-l", &pcr_list,
+                "-q", &user_data_hex,
+                "-m", quote_msg_path,
+                "-s", quote_sig_path,
+                "-o", quote_pcr_path,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to execute tpm2_quote: {}", e))?;
+
+        if !quote_output.status.success() {
+            let stderr = String::from_utf8_lossy(&quote_output.stderr);
+            return Err(format!("tpm2_quote failed: {}. The TPM key may need to be created first.", stderr));
+        }
+
+        // Read the quote message and signature
+        let quote_msg = fs::read(quote_msg_file.path())
+            .map_err(|e| format!("Failed to read quote message: {}", e))?;
+        let quote_sig = fs::read(quote_sig_file.path())
+            .map_err(|e| format!("Failed to read quote signature: {}", e))?;
+
+        println!("[Enclave] Generated TPM quote ({} bytes message, {} bytes signature)", 
+                 quote_msg.len(), quote_sig.len());
+
+        // Combine quote components into document
+        // Format: [quote_msg_len (4 bytes)][quote_msg][quote_sig_len (4 bytes)][quote_sig][pcr_data]
+        let mut document = Vec::new();
+        document.extend_from_slice(&(quote_msg.len() as u32).to_be_bytes());
+        document.extend_from_slice(&quote_msg);
+        document.extend_from_slice(&(quote_sig.len() as u32).to_be_bytes());
+        document.extend_from_slice(&quote_sig);
+        document.extend_from_slice(&pcr_data);
+
+        // Extract PCR values for display
+        let pcr_values = extract_pcr_values(&pcr_data);
+
+        // Temporary files are automatically cleaned up when they go out of scope
+
+        Ok(AttestationDocument {
+            is_mock: false,
+            document,
+            mrtd: None, // TPM doesn't have MRTD
+            rtmrs: Some(pcr_values), // Use rtmrs field for PCR values
+            user_data: user_data.to_vec(),
+        })
+    }
 }
 
-#[cfg(any(feature = "tdx", feature = "tdx-local"))]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>>) {
     // TDX quote structure (simplified):
     // The quote contains a TD Report which includes:
@@ -180,6 +291,29 @@ fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>
     };
 
     (mrtd, rtmrs)
+}
+
+#[cfg(feature = "tdx-local")]
+fn build_pcr_list() -> String {
+    // Build PCR list string for TPM commands (e.g., "sha256:0,1,2,3,4,5,6,7")
+    let pcr_indices: Vec<String> = (0..NUM_PCRS).map(|i| i.to_string()).collect();
+    format!("sha256:{}", pcr_indices.join(","))
+}
+
+#[cfg(feature = "tdx-local")]
+fn extract_pcr_values(pcr_data: &[u8]) -> Vec<String> {
+    // PCR data format: consecutive SHA256 hash values for PCRs 0-7
+    let mut pcr_values = Vec::new();
+    
+    for i in 0..NUM_PCRS {
+        let start = i * SHA256_HASH_SIZE;
+        let end = start + SHA256_HASH_SIZE;
+        if end <= pcr_data.len() {
+            pcr_values.push(hex::encode(&pcr_data[start..end]));
+        }
+    }
+    
+    pcr_values
 }
 
 #[cfg(any(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")), feature = "tdx-local"))]

@@ -99,10 +99,17 @@ tdx-oprf/
 
 ## Building
 
+> **⚠️ IMPORTANT: Which Mode Should You Use?**
+> - **Azure TDX VM (single VM)**: Use `tdx-local` mode ← **Most Common for Azure**
+> - **Two-VM nested setup with vsock**: Use `tdx` mode
+> - **Development/testing without TDX**: Use `local` mode (default)
+>
+> If you're on a **single Azure Confidential VM** and see vsock errors (`ENETUNREACH`), you need `tdx-local` mode, not `tdx` mode!
+
 The project supports three modes via feature flags:
 - `local` (default): Uses TCP sockets for testing without TDX
-- `tdx`: Uses vsock and TDX attestation (requires two-VM setup)
-- `tdx-local`: Uses TCP sockets with real TDX attestation (hybrid mode for single Azure TDX VM)
+- `tdx`: Uses vsock and configfs-tsm attestation (**requires two-VM nested virtualization setup**)
+- `tdx-local`: Uses TCP sockets with TPM attestation (**for single Azure TDX VM** - most common)
 
 ### Local Mode (Default)
 
@@ -116,7 +123,9 @@ cargo build --release --package tdx-oprf-enclave
 cargo build --release --package tdx-oprf-parent
 ```
 
-### TDX Mode
+### TDX Mode (Advanced - Two-VM Setup Only)
+
+> **Note**: This mode requires a nested virtualization setup with vsock communication between two VMs. **Not for single Azure TDX VMs** - use `tdx-local` mode instead.
 
 ```bash
 # Build enclave for TDX
@@ -126,9 +135,11 @@ cargo build --release --package tdx-oprf-enclave --features tdx
 cargo build --release --package tdx-oprf-parent --features tdx
 ```
 
-### TDX-Local Hybrid Mode
+### TDX-Local Hybrid Mode (Recommended for Azure)
 
-This mode combines TCP communication (like local mode) with real TDX attestation (like TDX mode). It's designed for running on a single Azure TDX VM where vsock between CID 2 and CID 3 is not available, but the VM has access to real TDX attestation via `/sys/kernel/config/tsm/report/tdx0`.
+> **✅ Use this mode for single Azure TDX VMs** - this is the most common deployment scenario on Azure.
+
+This mode combines TCP communication (like local mode) with TPM-based attestation. It's designed for running on a **single Azure TDX Confidential VM** where vsock is not available, but the VM has vTPM (`/dev/tpm0`) with PCR measurements bound to TDX.
 
 ```bash
 # Build enclave for TDX-Local hybrid mode
@@ -216,30 +227,84 @@ For detailed deployment instructions on Azure TDX-enabled VMs:
    sudo ./target/release/tdx-oprf-parent
    ```
 
-### Single Azure TDX VM Deployment (TDX-Local Hybrid Mode)
+### Single Azure TDX VM Deployment (TDX-Local Hybrid Mode with TPM)
 
-The TDX-Local hybrid mode allows you to test the full TDX attestation flow on a single Azure Confidential VM without needing a two-VM vsock setup. This is useful when:
-- You have a single Azure TDX VM with access to `/sys/kernel/config/tsm/report/tdx0`
-- You want real TDX attestation but don't have a host/guest VM setup
+The TDX-Local hybrid mode allows you to test the full TDX attestation flow on a single Azure Confidential VM. **On Azure TDX VMs, the configfs-tsm interface is not available.** Instead, Azure uses vTPM (`/dev/tpm0`) for attestation, where the TPM's PCR measurements are cryptographically bound to the TDX measurements.
+
+This mode is useful when:
+- You have a single Azure TDX VM with access to `/dev/tpm0`
+- The configfs-tsm interface (`/sys/kernel/config/tsm/report/`) is not available
 - vsock communication between CID 2 and CID 3 is not available
+
+#### Prerequisites for TDX-Local
+
+1. **Azure Confidential VM** with TDX support (DCasv5 or ECasv5 series)
+2. **tpm2-tools** must be installed:
+   ```bash
+   sudo apt update
+   sudo apt install tpm2-tools
+   ```
+3. **TPM attestation key** must be created (one-time setup):
+   
+   **Recommended approach** (works on most TPM configurations):
+   ```bash
+   # Create a primary key in the owner hierarchy (more widely supported)
+   tpm2_createprimary -C o -g sha256 -G rsa -c /tmp/primary.ctx
+   
+   # Create a signing key (works with tpm2_quote)
+   tpm2_create -C /tmp/primary.ctx -g sha256 -G rsa -r /tmp/ak.priv -u /tmp/ak.pub \
+     -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign"
+   
+   # Load the key
+   tpm2_load -C /tmp/primary.ctx -r /tmp/ak.priv -u /tmp/ak.pub -c /tmp/ak.ctx
+   
+   # Make it persistent at handle 0x81010001
+   tpm2_evictcontrol -C o -c /tmp/ak.ctx 0x81010001
+   
+   # Verify the key is available
+   tpm2_readpublic -c 0x81010001
+   ```
+   
+   **Alternative: Using tpm2_createak** (if the above doesn't work):
+   ```bash
+   # Try with owner hierarchy instead of endorsement
+   tpm2_createak -C o -G rsa -g sha256 -s rsassa -c /tmp/ak.ctx
+   tpm2_evictcontrol -C o -c /tmp/ak.ctx 0x81010001
+   ```
+   
+   **Note**: The recommended approach uses the owner hierarchy (`-C o`) instead of endorsement hierarchy (`-C e`) as it's more widely accessible. The key is created without the `restricted` attribute to avoid compatibility issues while still working with `tpm2_quote`.
 
 #### Quick Start for TDX-Local
 
 1. **Launch Azure Confidential VM** with TDX support (DCasv5 or ECasv5 series)
 
-2. **Verify TDX attestation is available:**
+2. **Verify TPM is available:**
    ```bash
-   dmesg | grep -i tdx
-   ls -l /sys/kernel/config/tsm/report/
+   # Check TPM device
+   ls -l /dev/tpm0
+   
+   # Test TPM functionality
+   sudo tpm2_getrandom 8 --hex
+   
+   # Read PCR values
+   sudo tpm2_pcrread sha256
    ```
 
-3. **Build for TDX-Local hybrid mode:**
+3. **Install dependencies and create TPM key (one-time setup):**
+   ```bash
+   sudo apt update
+   sudo apt install tpm2-tools
+   
+   # Create TPM attestation key (see Prerequisites above)
+   ```
+
+4. **Build for TDX-Local hybrid mode:**
    ```bash
    cargo build --release --package tdx-oprf-enclave --features tdx-local
    cargo build --release --package tdx-oprf-parent --features tdx-local
    ```
 
-4. **Terminal 1 - Run the enclave (requires root for attestation):**
+5. **Terminal 1 - Run the enclave (requires root for TPM access):**
    ```bash
    sudo ./target/release/tdx-oprf-enclave
    ```
@@ -250,9 +315,16 @@ The TDX-Local hybrid mode allows you to test the full TDX attestation flow on a 
    [Enclave] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)
    [Enclave] Generated secret key and public key
    [Enclave] Local server listening on 127.0.0.1:5000
+   [Enclave] Connection received
+   [Enclave] Generating TDX attestation (TPM-based)
+   [Enclave] Reading PCR values from TPM
+   [Enclave] Read PCR values (256 bytes)
+   [Enclave] Generating TPM quote
+   [Enclave] Generated TPM quote (XXX bytes message, YYY bytes signature)
+   [Enclave] Response sent successfully
    ```
 
-5. **Terminal 2 - Run the parent:**
+6. **Terminal 2 - Run the parent:**
    ```bash
    ./target/release/tdx-oprf-parent
    ```
@@ -263,16 +335,22 @@ The TDX-Local hybrid mode allows you to test the full TDX attestation flow on a 
    [Parent] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)
    [Parent] Connecting to enclave at 127.0.0.1:5000
    [Parent] Connected to enclave
-   [Parent] Verifying TDX attestation
-   [Parent] MRTD: <real TDX measurement>
-   [Parent] RTMR0-3: <real runtime measurements>
+   [Parent] Verifying TPM attestation (Azure TDX)
+   [Parent] PCR0: <hash value>
+   [Parent] PCR1: <hash value>
+   ...
+   [Parent] PCR7: <hash value>
+   [Parent] TPM attestation document size: XXX bytes
    [Parent] Attestation verified successfully
    [Parent] ================================================
    [Parent] OPRF OUTPUT (g^(m*k)): <hex encoded result>
    [Parent] ================================================
    ```
 
-**Note**: The TDX-Local hybrid mode uses TCP on localhost for communication (like local mode) but generates real TDX attestation quotes (like TDX mode). This is perfect for single-VM testing with actual hardware attestation.
+**Note**: The TDX-Local hybrid mode uses:
+- TCP on localhost for communication (like local mode)
+- TPM-based attestation via tpm2-tools (specifically for Azure TDX VMs)
+- The vTPM's PCR measurements are cryptographically bound to TDX measurements, providing hardware-backed attestation
 
 ## Attestation
 
@@ -287,9 +365,9 @@ In local mode, a mock attestation document is generated for testing purposes. It
 
 This allows testing the full protocol flow without TDX hardware.
 
-### TDX Mode and TDX-Local Hybrid Mode
+### TDX Mode (configfs-tsm)
 
-Both TDX mode and TDX-Local hybrid mode use real TDX attestation via the Linux configfs-tsm interface. The only difference is the communication method (vsock vs TCP). The attestation process is identical:
+TDX mode uses real TDX attestation via the Linux configfs-tsm interface:
 
 1. **Quote Generation**: The enclave writes report data to `/sys/kernel/config/tsm/report/tdx0/inblob`
 2. **Quote Retrieval**: The enclave reads the TDX quote from `/sys/kernel/config/tsm/report/tdx0/outblob`
@@ -297,18 +375,39 @@ Both TDX mode and TDX-Local hybrid mode use real TDX attestation via the Linux c
    - **MRTD**: Measurement of the TDX module (Trust Domain)
    - **RTMR0-3**: Runtime Measurement Registers (similar to TPM PCRs)
    - **User data**: Hash of the evaluated point
+4. **Communication**: Uses vsock (requires two-VM setup with host on CID 2, guest on CID 3)
 
-**Key Differences:**
-- **TDX Mode**: Uses vsock for communication (requires two-VM setup with host on CID 2, guest on CID 3)
-- **TDX-Local Hybrid Mode**: Uses TCP on localhost for communication (works on single Azure TDX VM)
+### TDX-Local Hybrid Mode (TPM-based)
 
-**Important for Production**: This implementation includes basic TDX quote generation but does not implement full verification. For production use, you must:
+TDX-Local hybrid mode uses TPM-based attestation via tpm2-tools, specifically designed for Azure Confidential VMs:
 
+1. **Quote Generation**: 
+   - Reads PCR values (0-7) using `tpm2_pcrread`
+   - Generates TPM quote with user data using `tpm2_quote`
+   - PCR measurements are cryptographically bound to TDX measurements via vTPM
+2. **Measurements**: The attestation includes:
+   - **PCR0-7**: Platform Configuration Registers containing boot measurements
+   - **TPM Quote**: Signed attestation of PCR values and user data
+   - **User data**: Hash of the evaluated point bound to the quote
+3. **Communication**: Uses TCP on localhost (works on single Azure TDX VM)
+
+**Why TPM for Azure?** Azure TDX VMs do not expose the configfs-tsm interface. Instead, they use a virtual TPM (vTPM) at `/dev/tpm0` where the TPM's PCR measurements are cryptographically bound to the underlying TDX measurements. This provides equivalent security guarantees while working within Azure's architecture.
+
+**Important for Production**: This implementation includes basic attestation generation but does not implement full verification. For production use, you must:
+
+**For TDX Mode (configfs-tsm):**
 1. Verify the quote signature using Intel's Attestation Service
 2. Validate MRTD matches your expected TDX module measurement
 3. Check RTMR values match expected initial state
 4. Verify the quote timestamp is recent
 5. Implement proper certificate chain verification
+
+**For TDX-Local Mode (TPM):**
+1. Verify the TPM quote signature using the TPM attestation key
+2. Validate PCR values match expected boot measurements
+3. Confirm user data is correctly bound to the quote
+4. Verify that PCRs reflect TDX measurements (via Azure's vTPM binding)
+5. Consider using Azure Attestation service for remote verification
 
 ## Security Considerations
 
@@ -471,6 +570,66 @@ uname -r  # Should be 5.15 or later
 dmesg | grep -i tdx
 # Verify TDX attestation driver is loaded
 lsmod | grep tdx
+```
+
+### Mode Selection Issues
+
+**Problem**: `ENETUNREACH` error when connecting via vsock on a single Azure VM
+```
+Error: Custom { kind: Other, error: ENETUNREACH }
+[Parent] Connecting to enclave via vsock (CID: 3, Port: 5000)
+```
+```bash
+# Solution: You're using the wrong mode! You built with 'tdx' but need 'tdx-local'
+# On a single Azure TDX VM, vsock is not available - use tdx-local mode instead:
+cargo build --release --package tdx-oprf-enclave --features tdx-local
+cargo build --release --package tdx-oprf-parent --features tdx-local
+
+# Then run:
+sudo ./target/release/tdx-oprf-enclave  # Terminal 1
+./target/release/tdx-oprf-parent        # Terminal 2
+```
+
+### TPM Attestation Issues (TDX-Local Mode)
+
+**Problem**: `tpm2_pcrread` or `tpm2_quote` command not found
+```bash
+# Solution: Install tpm2-tools
+sudo apt update
+sudo apt install tpm2-tools
+```
+
+**Problem**: TPM device `/dev/tpm0` not found
+```bash
+# Solution: Check if TPM is available
+ls -l /dev/tpm*
+# On Azure VMs, verify you're using a TDX-enabled VM (DCasv5/ECasv5 series)
+# Check TPM module is loaded
+lsmod | grep tpm
+sudo modprobe tpm_tis
+```
+
+**Problem**: `tpm2_quote` fails with "key not found" or "handle does not exist"
+```bash
+# Solution: Create the TPM attestation key (see Prerequisites in TDX-Local section)
+# Or verify the key exists:
+sudo tpm2_readpublic -c 0x81010001
+```
+
+**Problem**: Permission denied accessing TPM
+```bash
+# Solution: Run with root privileges
+sudo ./target/release/tdx-oprf-enclave
+# Alternatively, add user to tss group (requires re-login):
+sudo usermod -a -G tss $USER
+```
+
+**Problem**: `tpm2_quote` fails with "Failed to create object"
+```bash
+# Solution: The persistent key handle may be in use or invalid
+# Clear the handle and recreate:
+sudo tpm2_evictcontrol -C o -c 0x81010001  # Remove old key if exists
+# Then recreate the attestation key (see Prerequisites)
 ```
 
 ## Comparison with AWS Nitro Implementation
