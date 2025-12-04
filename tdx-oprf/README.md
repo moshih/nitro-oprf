@@ -99,9 +99,10 @@ tdx-oprf/
 
 ## Building
 
-The project supports two modes via feature flags:
+The project supports three modes via feature flags:
 - `local` (default): Uses TCP sockets for testing without TDX
-- `tdx`: Uses vsock and TDX attestation
+- `tdx`: Uses vsock and TDX attestation (requires two-VM setup)
+- `tdx-local`: Uses TCP sockets with real TDX attestation (hybrid mode for single Azure TDX VM)
 
 ### Local Mode (Default)
 
@@ -123,6 +124,18 @@ cargo build --release --package tdx-oprf-enclave --features tdx
 
 # Build parent for TDX
 cargo build --release --package tdx-oprf-parent --features tdx
+```
+
+### TDX-Local Hybrid Mode
+
+This mode combines TCP communication (like local mode) with real TDX attestation (like TDX mode). It's designed for running on a single Azure TDX VM where vsock between CID 2 and CID 3 is not available, but the VM has access to real TDX attestation via `/sys/kernel/config/tsm/report/tdx0`.
+
+```bash
+# Build enclave for TDX-Local hybrid mode
+cargo build --release --package tdx-oprf-enclave --features tdx-local
+
+# Build parent for TDX-Local hybrid mode
+cargo build --release --package tdx-oprf-parent --features tdx-local
 ```
 
 ## Running
@@ -203,6 +216,64 @@ For detailed deployment instructions on Azure TDX-enabled VMs:
    sudo ./target/release/tdx-oprf-parent
    ```
 
+### Single Azure TDX VM Deployment (TDX-Local Hybrid Mode)
+
+The TDX-Local hybrid mode allows you to test the full TDX attestation flow on a single Azure Confidential VM without needing a two-VM vsock setup. This is useful when:
+- You have a single Azure TDX VM with access to `/sys/kernel/config/tsm/report/tdx0`
+- You want real TDX attestation but don't have a host/guest VM setup
+- vsock communication between CID 2 and CID 3 is not available
+
+#### Quick Start for TDX-Local
+
+1. **Launch Azure Confidential VM** with TDX support (DCasv5 or ECasv5 series)
+
+2. **Verify TDX attestation is available:**
+   ```bash
+   dmesg | grep -i tdx
+   ls -l /sys/kernel/config/tsm/report/
+   ```
+
+3. **Build for TDX-Local hybrid mode:**
+   ```bash
+   cargo build --release --package tdx-oprf-enclave --features tdx-local
+   cargo build --release --package tdx-oprf-parent --features tdx-local
+   ```
+
+4. **Terminal 1 - Run the enclave (requires root for attestation):**
+   ```bash
+   sudo ./target/release/tdx-oprf-enclave
+   ```
+   
+   Expected output:
+   ```
+   [Enclave] Starting TDX OPRF Enclave...
+   [Enclave] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)
+   [Enclave] Generated secret key and public key
+   [Enclave] Local server listening on 127.0.0.1:5000
+   ```
+
+5. **Terminal 2 - Run the parent:**
+   ```bash
+   ./target/release/tdx-oprf-parent
+   ```
+   
+   Expected output:
+   ```
+   [Parent] Starting TDX OPRF Parent...
+   [Parent] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)
+   [Parent] Connecting to enclave at 127.0.0.1:5000
+   [Parent] Connected to enclave
+   [Parent] Verifying TDX attestation
+   [Parent] MRTD: <real TDX measurement>
+   [Parent] RTMR0-3: <real runtime measurements>
+   [Parent] Attestation verified successfully
+   [Parent] ================================================
+   [Parent] OPRF OUTPUT (g^(m*k)): <hex encoded result>
+   [Parent] ================================================
+   ```
+
+**Note**: The TDX-Local hybrid mode uses TCP on localhost for communication (like local mode) but generates real TDX attestation quotes (like TDX mode). This is perfect for single-VM testing with actual hardware attestation.
+
 ## Attestation
 
 ### Local Mode
@@ -216,9 +287,9 @@ In local mode, a mock attestation document is generated for testing purposes. It
 
 This allows testing the full protocol flow without TDX hardware.
 
-### TDX Mode
+### TDX Mode and TDX-Local Hybrid Mode
 
-In TDX mode, real TDX attestation is used via the Linux configfs-tsm interface:
+Both TDX mode and TDX-Local hybrid mode use real TDX attestation via the Linux configfs-tsm interface. The only difference is the communication method (vsock vs TCP). The attestation process is identical:
 
 1. **Quote Generation**: The enclave writes report data to `/sys/kernel/config/tsm/report/tdx0/inblob`
 2. **Quote Retrieval**: The enclave reads the TDX quote from `/sys/kernel/config/tsm/report/tdx0/outblob`
@@ -226,6 +297,10 @@ In TDX mode, real TDX attestation is used via the Linux configfs-tsm interface:
    - **MRTD**: Measurement of the TDX module (Trust Domain)
    - **RTMR0-3**: Runtime Measurement Registers (similar to TPM PCRs)
    - **User data**: Hash of the evaluated point
+
+**Key Differences:**
+- **TDX Mode**: Uses vsock for communication (requires two-VM setup with host on CID 2, guest on CID 3)
+- **TDX-Local Hybrid Mode**: Uses TCP on localhost for communication (works on single Azure TDX VM)
 
 **Important for Production**: This implementation includes basic TDX quote generation but does not implement full verification. For production use, you must:
 
@@ -357,7 +432,7 @@ kill <PID>
 # Wait a few seconds after starting enclave before running parent
 ```
 
-### TDX Deployment Issues
+### TDX and TDX-Local Deployment Issues
 
 **Problem**: `/sys/kernel/config/tsm/report/` not found
 ```bash
@@ -373,7 +448,15 @@ dmesg | grep -i tdx
 sudo ./target/release/tdx-oprf-enclave
 ```
 
-**Problem**: vsock connection fails
+**Problem**: vsock connection fails (TDX mode only)
+```bash
+# Solution: TDX mode requires a two-VM setup with vsock
+# If you only have a single Azure TDX VM, use tdx-local mode instead:
+cargo build --release --package tdx-oprf-enclave --features tdx-local
+cargo build --release --package tdx-oprf-parent --features tdx-local
+```
+
+**Problem**: vsock connection fails (standard TDX mode)
 ```bash
 # Solution: Check vsock module and CID assignment
 sudo modprobe vsock
