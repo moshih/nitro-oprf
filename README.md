@@ -68,7 +68,7 @@ The local mode uses TCP sockets instead of vsock, allowing you to test the full 
 
 ```bash
 # Option 1: Use the script
-./scripts/run_local. sh
+./scripts/run_local.sh
 
 # Option 2: Manual
 # Terminal 1 - Start enclave
