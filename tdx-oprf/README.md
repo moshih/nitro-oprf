@@ -246,13 +246,22 @@ This mode is useful when:
    ```
 3. **TPM attestation key** must be created (one-time setup):
    ```bash
+   # Option A: Use tpm2_createak (recommended - handles all complexity automatically)
+   tpm2_createak -C e -G rsa -g sha256 -s rsassa -c /tmp/ak.ctx
+   tpm2_evictcontrol -C o -c /tmp/ak.ctx 0x81010001
+   tpm2_readpublic -c 0x81010001
+   ```
+   
+   **Alternative Option B** (if tpm2_createak is not available or fails):
+   ```bash
    # Create a primary key in the endorsement hierarchy
    tpm2_createprimary -C e -g sha256 -G rsa -c /tmp/primary.ctx
    
-   # Create an attestation key under the primary
-   tpm2_create -C /tmp/primary.ctx -g sha256 -G rsa -r /tmp/ak.priv -u /tmp/ak.pub -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|sign"
+   # Create a signing key (simpler approach that works with tpm2_quote)
+   tpm2_create -C /tmp/primary.ctx -g sha256 -G rsa -r /tmp/ak.priv -u /tmp/ak.pub \
+     -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign"
    
-   # Load the attestation key
+   # Load the key
    tpm2_load -C /tmp/primary.ctx -r /tmp/ak.priv -u /tmp/ak.pub -c /tmp/ak.ctx
    
    # Make it persistent at handle 0x81010001
@@ -261,6 +270,8 @@ This mode is useful when:
    # Verify the key is available
    tpm2_readpublic -c 0x81010001
    ```
+   
+   **Note**: Option A creates a proper attestation key. Option B creates a simpler signing key that still works with `tpm2_quote`. The key difference is that Option B removes the `restricted` attribute which was causing the incompatibility error.
 
 #### Quick Start for TDX-Local
 
