@@ -7,15 +7,15 @@ use tdx_oprf_common::{
 use rand::rngs::OsRng;
 use std::io::{Read, Write};
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 use std::os::unix::io::AsRawFd;
 
-#[cfg(all(feature = "local", not(feature = "tdx")))]
+#[cfg(any(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")), feature = "tdx-local"))]
 const LOCAL_PORT: u16 = 5000;
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_PORT: u32 = 5000;
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_CID_ANY: u32 = 0xFFFFFFFF;
 
 /// Enclave state holding the secret key and public key
@@ -72,7 +72,7 @@ impl EnclaveState {
         })
     }
 
-    #[cfg(all(feature = "local", not(feature = "tdx")))]
+    #[cfg(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")))]
     fn generate_attestation(&self, user_data: &[u8]) -> Result<AttestationDocument, String> {
         println!("[Enclave] Generating mock attestation (local mode)");
 
@@ -101,7 +101,7 @@ impl EnclaveState {
         })
     }
 
-    #[cfg(feature = "tdx")]
+    #[cfg(any(feature = "tdx", feature = "tdx-local"))]
     fn generate_attestation(&self, user_data: &[u8]) -> Result<AttestationDocument, String> {
         println!("[Enclave] Generating TDX attestation");
 
@@ -149,7 +149,7 @@ impl EnclaveState {
     }
 }
 
-#[cfg(feature = "tdx")]
+#[cfg(any(feature = "tdx", feature = "tdx-local"))]
 fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>>) {
     // TDX quote structure (simplified):
     // The quote contains a TD Report which includes:
@@ -182,7 +182,7 @@ fn extract_tdx_measurements(quote: &[u8]) -> (Option<String>, Option<Vec<String>
     (mrtd, rtmrs)
 }
 
-#[cfg(all(feature = "local", not(feature = "tdx")))]
+#[cfg(any(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")), feature = "tdx-local"))]
 fn run_server(state: EnclaveState) -> std::io::Result<()> {
     use std::net::TcpListener;
 
@@ -201,7 +201,7 @@ fn run_server(state: EnclaveState) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 fn run_server(state: EnclaveState) -> std::io::Result<()> {
     use nix::sys::socket::{
         accept, bind, listen, socket, AddressFamily, SockFlag, SockType, VsockAddr,
@@ -296,11 +296,14 @@ fn handle_connection<S: Read + Write>(stream: &mut S, state: &EnclaveState) {
 fn main() -> std::io::Result<()> {
     println!("[Enclave] Starting TDX OPRF Enclave...");
 
-    #[cfg(all(feature = "local", not(feature = "tdx")))]
+    #[cfg(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")))]
     println!("[Enclave] Running in LOCAL mode");
 
-    #[cfg(feature = "tdx")]
+    #[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
     println!("[Enclave] Running in TDX mode");
+
+    #[cfg(feature = "tdx-local")]
+    println!("[Enclave] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)");
 
     let state = EnclaveState::new();
     run_server(state)
