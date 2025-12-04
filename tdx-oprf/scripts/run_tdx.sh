@@ -68,12 +68,44 @@ For attestation issues:
 - Review dmesg for TDX-related errors
 
 ================================================================================
+TDX-Local Hybrid Mode (Single Azure TDX VM):
+================================================================================
+
+If you have a single Azure TDX VM and vsock between CID 2 and 3 is not available,
+use the TDX-Local hybrid mode which combines TCP communication with real TDX
+attestation:
+
+1. Build for TDX-Local hybrid mode:
+   cargo build --release --package tdx-oprf-enclave --features tdx-local
+   cargo build --release --package tdx-oprf-parent --features tdx-local
+
+2. Terminal 1 - Run the enclave (requires root for attestation):
+   sudo ./target/release/tdx-oprf-enclave
+
+3. Terminal 2 - Run the parent (on the same VM):
+   ./target/release/tdx-oprf-parent
+
+This mode uses:
+- TCP on localhost (127.0.0.1:5000) for communication
+- Real TDX attestation via /sys/kernel/config/tsm/report/tdx0
+
+Perfect for testing TDX attestation on a single Azure Confidential VM!
+
+================================================================================
 Notes:
 ================================================================================
 
+Standard TDX Mode:
 - The parent (host) typically runs on CID 2
 - The enclave (guest) typically runs on CID 3
 - Port 5000 is used by default for vsock communication
+
+TDX-Local Hybrid Mode:
+- Both enclave and parent run on the same single Azure TDX VM
+- Uses TCP on localhost (127.0.0.1:5000) for communication
+- Provides real TDX attestation without requiring vsock setup
+
+General:
 - TDX attestation requires root privileges for configfs-tsm access
 - In production, implement full quote verification with Intel Attestation Service
 

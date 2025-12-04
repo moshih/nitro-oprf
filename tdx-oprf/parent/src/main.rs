@@ -7,15 +7,15 @@ use tdx_oprf_common::{
 use rand::rngs::OsRng;
 use std::io::{Read, Write};
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 use std::os::unix::io::AsRawFd;
 
-#[cfg(all(feature = "local", not(feature = "tdx")))]
+#[cfg(any(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")), feature = "tdx-local"))]
 const LOCAL_PORT: u16 = 5000;
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_PORT: u32 = 5000;
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 const VSOCK_CID_GUEST: u32 = 3; // TDX guest CID (parent is 2, guest is 3)
 
 /// Verify attestation document
@@ -75,7 +75,7 @@ fn verify_attestation(
     }
 }
 
-#[cfg(all(feature = "local", not(feature = "tdx")))]
+#[cfg(any(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")), feature = "tdx-local"))]
 fn connect_to_enclave() -> std::io::Result<std::net::TcpStream> {
     use std::net::TcpStream;
 
@@ -83,7 +83,7 @@ fn connect_to_enclave() -> std::io::Result<std::net::TcpStream> {
     TcpStream::connect(format!("127.0.0.1:{}", LOCAL_PORT))
 }
 
-#[cfg(feature = "tdx")]
+#[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
 fn connect_to_enclave() -> std::io::Result<std::net::TcpStream> {
     use nix::sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, VsockAddr};
     use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -136,11 +136,14 @@ fn send_request<S: Read + Write>(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Parent] Starting TDX OPRF Parent...");
 
-    #[cfg(all(feature = "local", not(feature = "tdx")))]
+    #[cfg(all(feature = "local", not(feature = "tdx"), not(feature = "tdx-local")))]
     println!("[Parent] Running in LOCAL mode");
 
-    #[cfg(feature = "tdx")]
+    #[cfg(all(feature = "tdx", not(feature = "tdx-local")))]
     println!("[Parent] Running in TDX mode");
+
+    #[cfg(feature = "tdx-local")]
+    println!("[Parent] Running in TDX-LOCAL hybrid mode (TCP + real TDX attestation)");
 
     let mut rng = OsRng;
 
