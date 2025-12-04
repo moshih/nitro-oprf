@@ -175,7 +175,7 @@ fn chrono_lite_timestamp() -> u64 {
 fn run_server(state: EnclaveState) -> std::io::Result<()> {
     use std::net::TcpListener;
 
-    let listener = TcpListener::bind(format!("127. 0.0.1:{}", LOCAL_PORT))?;
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", LOCAL_PORT))?;
     println!("[Enclave] Local server listening on 127.0.0.1:{}", LOCAL_PORT);
 
     for stream in listener.incoming() {
